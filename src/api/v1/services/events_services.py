@@ -1,14 +1,14 @@
 """Event lifecycle and synchronization operations."""
 
+import re
 from dataclasses import dataclass
 from datetime import date
-import re
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 #from src.api.v1.schemas.events import EventResponse
-from src.api.v1.models import Event
+from src.api.v1.models import Event, Fight
 from src.scrapers.upcoming_events_scraper import parse_event_date
 
 
@@ -123,3 +123,36 @@ def list_upcoming_events(db: Session, as_of: date) -> list:
             .order_by(Event.event_date.asc().nulls_last(), Event.name.asc())
         ).all()
     )
+
+
+def list_events(
+    db: Session,
+    status: str | None = None,
+    since: date | None = None,
+    until: date | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Event]:
+    """Stored events, newest first, optionally filtered by status and date window."""
+    query = select(Event)
+    if status:
+        query = query.where(Event.status == status)
+    if since:
+        query = query.where(Event.event_date >= since)
+    if until:
+        query = query.where(Event.event_date <= until)
+    query = query.order_by(Event.event_date.desc().nulls_last(), Event.name.asc())
+    return list(db.scalars(query.limit(limit).offset(offset)).all())
+
+
+def get_event_with_fights(db: Session, event_id: int) -> Event | None:
+    """An event with its fights (in card order) and their fighters loaded."""
+    event = db.scalar(
+        select(Event)
+        .where(Event.id == event_id)
+        .options(
+            selectinload(Event.fights).selectinload(Fight.red_fighter),
+            selectinload(Event.fights).selectinload(Fight.blue_fighter),
+        )
+    )
+    return event
