@@ -9,10 +9,17 @@ import pytest
 from sqlalchemy import func, select
 
 from src.api.v1.models import Event, Fight, Fighter, FightStatistic, ScrapeJob
-from src.api.v1.services import ingestionServices as svc
+from src.api.v1.services import ingestion_services as svc
 from src.scrapers.historical_scraper import parse_fight_details, parse_fighter_details
-from tests.helpers import BASE, EVENT_URL, SMITH_URL, VAN_URL, count, event_data, fixture
-
+from tests.helpers import (
+    BASE,
+    EVENT_URL,
+    SMITH_URL,
+    VAN_URL,
+    count,
+    event_data,
+    fixture,
+)
 
 # --- DB functions ----------------------------------------------------------
 

@@ -18,27 +18,14 @@ Examples:
 import asyncio
 from typing import Annotated
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    HTTPException,
-    Query,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.v1.database import get_db
 from src.api.v1.models import ScrapeJob
-from src.api.v1.schemas.ingestionSchema import IngestionJobCreate, IngestionJobResponse
-from src.api.v1.services.ingestionServices import (
-    create_job,
-    get_active_job,
-    run_ingestion_job,
-)
+from src.api.v1.schemas.ingestion_schema import IngestionJobCreate, IngestionJobResponse
+from src.api.v1.services.ingestion_services import create_job, get_active_job, run_ingestion_job
 
 router = APIRouter()
 

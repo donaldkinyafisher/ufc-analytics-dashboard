@@ -7,14 +7,13 @@ like FastAPI without blocking the event loop.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from playwright.async_api import async_playwright
 
 UPCOMING_URL = "http://ufcstats.com/statistics/events/upcoming"
 
 
-def parse_event_date(raw_date: str) -> Optional[datetime]:
+def parse_event_date(raw_date: str) -> datetime | None:
     raw_date = " ".join(raw_date.split())
     for fmt in ("%B %d, %Y", "%b %d, %Y"):
         try:
