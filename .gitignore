@@ -17,3 +17,5 @@ __pycache__/
 # Built locally on each machine (trained models, saved split, metrics)
 src/ml/artifacts/
 *.db.bak*
+plan.md
+todo.md
