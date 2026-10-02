@@ -1,114 +1,70 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
 import joblib
 import numpy as np
-import pandas as pd
 import optuna
-from .config import SEARCH_SPACES
+import pandas as pd
 import torch
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support
-from sklearn.model_selection import cross_val_score, train_test_split, KFold
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    precision_recall_fscore_support,
+)
+from sklearn.model_selection import KFold, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.svm import SVC
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from xgboost import XGBClassifier
-from .utils import load_preprocessed_data, load_data
 
-ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
-MODELS_DIR = ARTIFACT_DIR / "models"
-DATA_DIR = ARTIFACT_DIR / "data"
-METRICS_DIR = ARTIFACT_DIR / "metrics"
-DATASET_PATH = DATA_DIR / "ufc_split_data.npz"
-DEFAULT_METRICS_PATH = METRICS_DIR/ "model_metrics.json"
+from src.analytics.extract import load_raw_tables
+
+from .config import SEARCH_SPACES
+from .dataset import fight_features, training_set
+from .features import FEATURE_COLUMNS, LABEL_MAPPING, build_preprocessor, select_features
+from .nets import FightWinnerNet
+from .utils import (
+    DATA_DIR,
+    DATASET_PATH,
+    METRICS_DIR,
+    MODEL_FILE_SUFFIX,
+    MODEL_METRICS_PATH,
+    MODEL_NAMES,
+    MODELS_DIR,
+)
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
-TARGET_COLUMN = "winner"
-LABEL_MAPPING = {"blue": 0, "red": 1}
-INVERSE_LABEL_MAPPING = {value: key for key, value in LABEL_MAPPING.items()}
+DEFAULT_COMPARISON_MODELS = MODEL_NAMES
 
-DEFAULT_COMPARISON_MODELS = [
-    "pytorch_mlp",
-    "logistic_regression",
-    "svm",
-    "knn",
-    "random_forest",
-    "xgboost",
-]
-
-NUMERIC_FEATURES = [
-    "red_fighter_height",
-    "red_fighter_reach",
-    "red_fighter_slpm_cs",
-    "red_fighter_str_acc_cs",
-    "red_fighter_sapm_cs",
-    "red_fighter_str_def_cs",
-    "red_fighter_td_avg_cs",
-    "red_fighter_td_acc_cs",
-    "red_fighter_td_def_cs",
-    "red_fighter_sub_avg_cs",
-    "blue_fighter_height",
-    "blue_fighter_reach",
-    "blue_fighter_slpm_cs",
-    "blue_fighter_str_acc_cs",
-    "blue_fighter_sapm_cs",
-    "blue_fighter_str_def_cs",
-    "blue_fighter_td_avg_cs",
-    "blue_fighter_td_acc_cs",
-    "blue_fighter_td_def_cs",
-    "blue_fighter_sub_avg_cs",
-    "weight_class",
-]
-
-CATEGORICAL_FEATURES = [
-    "red_fighter_stance",
-    "blue_fighter_stance",
-    "sex",
-]
-
-
-class FightWinnerNet(nn.Module):
-    def __init__(self, input_dim: int, hidden_dims: tuple[int, ...] = (64, 32), dropout: float = 0.2) -> None:
-        super().__init__()
-        layers: list[nn.Module] = []
-        previous_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(previous_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout))
-            previous_dim = hidden_dim
-        layers.append(nn.Linear(previous_dim, 1))
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return self.network(features).squeeze(1)
-
-def load_model(model_name: str):
-    return joblib.load(MODELS_DIR / f"{model_name}.joblib")
 
 def train_model(
     models: list = ["pytorch_mlp"],
     model_configs: dict[str, dict[str, Any]] | None = None,
-    metrics_path: str | Path = DEFAULT_METRICS_PATH,
+    metrics_path: str | Path = MODEL_METRICS_PATH,
     test_size: float = 0.2,
     random_state: int = 42,
-    tune:bool = False
+    tune:bool = False,
+    raw: dict[str, pd.DataFrame] | None = None,
 ):
     """
-    Train one or more fight-winner classifiers. The models are written to disk in the artifacts/models directory, 
-    and their evaluation metrics are written to a JSON file in the artifacts/metrics directory.
+    Train one or more fight-winner classifiers on the database.
+
+    The training set is rebuilt on every run (the database grows), and the
+    split is saved to artifacts/data for the Train page. Each model is saved
+    to artifacts/models together with the preprocessor it was trained with,
+    and its evaluation metrics are merged into the metrics JSON file.
+    `raw` overrides the tables read from the database (used by tests).
     """
 
     model_configs = model_configs or {}
@@ -117,43 +73,31 @@ def train_model(
     if unknown_models:
         raise ValueError(f"Unknown model type(s): {', '.join(sorted(unknown_models))}")
 
-    if not DATASET_PATH.exists():
+    features = fight_features(raw if raw is not None else load_raw_tables())
+    X_train, X_test, y_train, y_test = training_set(
+        features, test_size=test_size, random_state=random_state
+    )
+    y_train, y_test = y_train.to_numpy(), y_test.to_numpy()
 
-        historical_fights_df = load_data()
-        prepared = _prepare_training_frame(historical_fights_df)
-        feature_columns = _available_feature_columns(prepared)
-        if not feature_columns:
-            raise ValueError("No usable training features found in historical_fights_df.")
+    preprocessor = build_preprocessor(FEATURE_COLUMNS)
+    X_train_processed = _as_dense_float32(preprocessor.fit_transform(select_features(X_train)))
+    X_test_processed = _as_dense_float32(preprocessor.transform(select_features(X_test)))
+    feature_names = preprocessor.get_feature_names_out().tolist()
 
-        X = _select_features(prepared, feature_columns)
-        y = prepared[TARGET_COLUMN].map(LABEL_MAPPING).astype(int)
+    np.savez_compressed(
+        DATASET_PATH,
+        X_train=X_train_processed,
+        X_test=X_test_processed,
+        y_train=y_train,
+        y_test=y_test,
+        feature_names=feature_names,
+    )
+    split_info = {
+        "train_size": len(X_train),
+        "test_size": len(X_test),
+        "test_from": X_test["event_date"].min().date().isoformat(),
+    }
 
-        stratify = y if y.nunique() > 1 else None
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=test_size,
-            random_state=random_state,
-            stratify=stratify,
-        )
-
-        preprocessor = _build_preprocessor(feature_columns)
-        X_train_processed = preprocessor.fit_transform(X_train)
-        X_test_processed = preprocessor.transform(X_test)
-        feature_names = preprocessor.get_feature_names_out().tolist()
-
-        np.savez_compressed(
-            DATASET_PATH, 
-            X_train=_as_dense_float32(X_train_processed),
-            X_test=_as_dense_float32(X_test_processed),
-            y_train=y_train, 
-            y_test=y_test,
-            feature_names = feature_names
-            )
-        
-    else:
-        X_train_processed, y_train, X_test_processed, y_test, _ = load_preprocessed_data()
-        
     results = {}
     for candidate in candidate_model_types:
         if tune and candidate not in ['pytorch_mlp']:
@@ -178,10 +122,19 @@ def train_model(
             random_state=random_state,
             config=model_configs.get(candidate, {}),
         )
-        joblib.dump(model, MODELS_DIR / f"{candidate}.joblib")
+        trained_at = datetime.now(UTC).isoformat(timespec="seconds")
+        joblib.dump(
+            {
+                "model": model,
+                "preprocessor": preprocessor,
+                "feature_columns": FEATURE_COLUMNS,
+                "trained_at": trained_at,
+            },
+            MODELS_DIR / f"{candidate}{MODEL_FILE_SUFFIX}",
+        )
 
         metrics = _evaluate_model(candidate, model, X_test_processed, y_test)
-        results[candidate] = metrics
+        results[candidate] = {**metrics, **split_info, "trained_at": trained_at}
 
     #Write metrics to file
     _write_metrics(results, metrics_path)
@@ -214,58 +167,6 @@ def _tune_model(
     print(f"\n---{model_name} Optimization Complete ---")
 
     return study.best_trial.params, study.best_value
-
-def _prepare_training_frame(df: pd.DataFrame) -> pd.DataFrame:
-    if TARGET_COLUMN not in df.columns:
-        raise ValueError(f"historical_fights_df must include a '{TARGET_COLUMN}' column.")
-
-    prepared = df.copy()
-    prepared[TARGET_COLUMN] = prepared[TARGET_COLUMN].astype(str).str.lower().str.strip()
-    prepared = prepared[prepared[TARGET_COLUMN].isin(LABEL_MAPPING)].copy()
-    if prepared.empty:
-        raise ValueError("No red/blue winner rows found after filtering draws and no-contests.")
-
-    return prepared
-
-
-def _available_feature_columns(df: pd.DataFrame) -> list[str]:
-    return [column for column in NUMERIC_FEATURES + CATEGORICAL_FEATURES if column in df.columns]
-
-
-def _select_features(df: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
-    selected = pd.DataFrame(index=df.index)
-    for column in feature_columns:
-        selected[column] = df[column] if column in df.columns else np.nan
-        if column in NUMERIC_FEATURES:
-            selected[column] = pd.to_numeric(selected[column], errors="coerce")
-    return selected
-
-
-def _build_preprocessor(feature_columns: list[str]) -> ColumnTransformer:
-    numeric_features = [column for column in NUMERIC_FEATURES if column in feature_columns]
-    categorical_features = [column for column in CATEGORICAL_FEATURES if column in feature_columns]
-
-    numeric_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    categorical_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
-        ]
-    )
-
-    return ColumnTransformer(
-        transformers=[
-            ("numeric", numeric_pipeline, numeric_features),
-            ("categorical", categorical_pipeline, categorical_features),
-        ],
-        remainder="drop",
-    )
-
 
 def _train_pytorch_mlp(
     x_train: Any,
@@ -522,7 +423,6 @@ def _write_metrics(metrics: dict[str, Any], metrics_path: str | Path) -> None:
     with path.open("w", encoding="utf-8") as metrics_file:
         json.dump(existing, metrics_file, indent=2)
 
-    return
 
 
 _MODEL_TRAINERS: dict[str, Callable[..., Any]] = {
@@ -537,7 +437,6 @@ _MODEL_TRAINERS: dict[str, Callable[..., Any]] = {
 
 if __name__ == "__main__":
 
-    #historical_fights_df = pd.read_csv("app/data/historical_fights.csv")
     results = train_model(
         models=["svm", "knn", "xgboost"],
         tune=True

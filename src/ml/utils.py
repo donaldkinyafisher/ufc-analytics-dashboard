@@ -1,70 +1,47 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import os
+"""Artifact paths and loaders for the ML package.
+
+No Streamlit here: the API imports this package too. The Streamlit app wraps
+these loaders with st.cache_* in src/utils.py.
+"""
+
 import json
 from pathlib import Path
-import requests
-import joblib
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+import numpy as np
+
 ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
-MODEL_METRICS_PATH = ARTIFACT_DIR / "metrics" / "model_metrics.json"
 MODELS_DIR = ARTIFACT_DIR / "models"
 DATA_DIR = ARTIFACT_DIR / "data"
+METRICS_DIR = ARTIFACT_DIR / "metrics"
 DATASET_PATH = DATA_DIR / "ufc_split_data.npz"
+MODEL_METRICS_PATH = METRICS_DIR / "model_metrics.json"
+MODEL_FILE_SUFFIX = ".joblib"
 
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("data/historical_fights.csv")
-    except FileNotFoundError:
-        st.error("Historical fights data not found. Run the import_ufcdata.py script to fetch the data.")
-        st.stop()
-    return df
+# Every model type training supports, in the order the app lists them.
+MODEL_NAMES = [
+    "pytorch_mlp",
+    "logistic_regression",
+    "svm",
+    "knn",
+    "random_forest",
+    "xgboost",
+]
 
-@st.cache_data
-def load_preprocessed_data() -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, list]:
-    """
 
-    Args:
+def load_preprocessed_data(path: Path = DATASET_PATH) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The saved train/test split: (X_train, y_train, X_test, y_test, feature_names)."""
+    with np.load(path) as archive:
+        return (
+            archive["X_train"],
+            archive["y_train"],
+            archive["X_test"],
+            archive["y_test"],
+            archive["feature_names"],
+        )
 
-    Returns:
-        _type_: _description_
-    """
 
-    # 1. Open the archive wrapper
-    data_archive = np.load(DATASET_PATH)
-
-    # 2. Unpack them directly into variables
-    X_train = data_archive['X_train']
-    X_test = data_archive['X_test']
-    y_train = data_archive['y_train']
-    y_test = data_archive['y_test']
-    feature_names = data_archive['feature_names']
-
-    # 3. Always close the archive file when finished unpacking
-    data_archive.close()
-
-    return X_train, y_train, X_test, y_test, feature_names
-
-@st.cache_resource
-def load_model(model_name: str):
-    return joblib.load(MODELS_DIR / f"{model_name}.joblib")
-
-def api_get(path: str):
-    response = requests.get(f"{API_BASE_URL}{path}", timeout=30)
-    response.raise_for_status()
-    return response.json()
-
-def api_post(path: str, params: dict | None = None):
-    response = requests.post(f"{API_BASE_URL}{path}", params=params, timeout=120)
-    response.raise_for_status()
-    return response.json()
-
-def load_model_metrics() -> dict:
-    if MODEL_METRICS_PATH.exists():
-        with MODEL_METRICS_PATH.open("r", encoding="utf-8") as metrics_file:
-            return json.load(metrics_file)
-    else:
-        raise FileNotFoundError(f"Model metrics file not found at {MODEL_METRICS_PATH}.")
+def load_model_metrics(path: Path = MODEL_METRICS_PATH) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Model metrics file not found at {path}.")
+    with path.open("r", encoding="utf-8") as metrics_file:
+        return json.load(metrics_file)

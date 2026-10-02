@@ -1,4 +1,3 @@
-import optuna
 from optuna.trial import Trial
 
 

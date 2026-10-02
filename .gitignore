@@ -5,8 +5,15 @@ __pycache__/
 *.py[cod]
 *.db
 .streamlit/secrets.toml
+*.pytest_cache/
+*.ruff_cache/
 
 #AI Files
 .agents/
 .github/
+.claude/
 
+
+# Built locally on each machine (trained models, saved split, metrics)
+src/ml/artifacts/
+*.db.bak*
