@@ -1,76 +1,142 @@
-import streamlit as st
-from src.utils import load_data, api_post, api_get, load_model_metrics, load_model, load_preprocessed_data
+import json
+from datetime import UTC, datetime
+
 import pandas as pd
 import requests
-import streamlit as st
-from src.ml.training import DEFAULT_COMPARISON_MODELS, DEFAULT_METRICS_PATH, train_model
 import shap
 from matplotlib import pyplot as plt
-import json
+
+import streamlit as st
+from src.ml.features import FEATURE_COLUMNS
+from src.ml.utils import MODEL_NAMES
+from src.utils import (
+    api_get,
+    error_detail,
+    load_event_predictions,
+    load_model,
+    load_model_metrics,
+    load_models,
+    load_preprocessed_data,
+    load_shap_values,
+    load_status,
+    load_training_fights,
+    start_job,
+)
+
+
+@st.fragment(run_every=5)
+def training_progress(job_id: int) -> None:
+    """Poll a training job; when it ends, rerun the page to show its results."""
+    try:
+        job = api_get(f"/api/v1/models/training-jobs/{job_id}", timeout=5)
+    except requests.exceptions.RequestException as error:
+        st.warning(f"Lost contact with the API, retrying: {error_detail(error)}")
+        return
+
+    if job["status"] not in ("queued", "running"):
+        # Training rewrote the model files, the saved split and the metrics.
+        load_preprocessed_data.clear()
+        load_models.clear()
+        load_model.clear()
+        load_event_predictions.clear()
+        st.session_state["finished_training_job"] = job
+        st.rerun()
+
+    models = ", ".join(job["models"])
+    tuning = " with hyper-parameter tuning" if job["tune"] else ""
+    if job["started_at"] is None:
+        st.info(f"Queued: {models}{tuning}.")
+    else:
+        started = datetime.fromisoformat(job["started_at"]).replace(tzinfo=UTC)
+        minutes, seconds = divmod(int((datetime.now(UTC) - started).total_seconds()), 60)
+        st.info(f"Training {models}{tuning}… {minutes}m {seconds:02d}s elapsed. "
+                "This runs in the API, so you can leave this page.")
 
 #st.title("Train and select model")
 
-historical_fights_df = load_data()
+training_fights_df = load_training_fights()
 
 #Preview data 
-st.subheader("Preview Trainining Data")
-st.dataframe(historical_fights_df.head())
+st.subheader("Preview Training Data")
+st.caption(
+    f"{len(training_fights_df):,} decided fights from the database. Career stats are from "
+    "each fighter's earlier ufc fights only; heights and reaches are in inches."
+)
+st.dataframe(
+    training_fights_df[["event_date", "red_name", "blue_name", "winner_side", *FEATURE_COLUMNS]].tail(),
+    hide_index=True,
+)
 
 #Train model
 st.subheader("Train Model")
 
-#Display Metrics - reload model_metrics if user presses button to train model
-selected_model_to_train = st.multiselect("Select model to train", options=['All'] + DEFAULT_COMPARISON_MODELS)
-if selected_model_to_train and 'All' in selected_model_to_train:
-    selected_model_to_train = DEFAULT_COMPARISON_MODELS
+# Training runs as an API job; the page polls it while it runs.
+active_job = load_status()["active_training_job"]
+if active_job is not None:
+    training_progress(active_job["id"])
+else:
+    selected_model_to_train = st.multiselect("Select model to train", options=['All'] + MODEL_NAMES)
+    if selected_model_to_train and 'All' in selected_model_to_train:
+        selected_model_to_train = MODEL_NAMES
 
-#Tune Hyper-paramaters
-tune_hyperparameters = st.checkbox("Tune Hyper-parameters")
-st.warning(" Hyper-parameter tuning is currently not availbale for the Pytorch MLP model. Tuning may take a long time depending on the model and the number of trials.")
-tune = True if tune_hyperparameters else False
+    #Tune Hyper-paramaters
+    tune_hyperparameters = st.checkbox("Tune Hyper-parameters")
+    st.warning(" Hyper-parameter tuning is currently not availbale for the Pytorch MLP model. Tuning may take a long time depending on the model and the number of trials.")
+    tune = bool(tune_hyperparameters)
 
-if st.button("Train", type="primary") and selected_model_to_train:
-    with st.spinner("Training model..."):
-        try:
-            results = train_model(
-                models=selected_model_to_train,
-                tune = tune
-            )
-        except Exception as exc:
-            raise ValueError(f"Could not train model: {exc}")
-        st.success(f"Model trained and metrics saved.")
-        for m in selected_model_to_train:
-            st.write(f"Classification report for {m}")
-            classifcation_report = pd.DataFrame.from_dict(results[m]['classification_report'])
-            st.table(classifcation_report)
-                                                      
-st.subheader("Model Metrics")
+    if st.button("Train", type="primary") and selected_model_to_train:
+        start_job("/api/v1/models/training-jobs",
+                  {"models": selected_model_to_train, "tune": tune}, "training")
+
+# Results of a job that finished while this page was polling it, shown once.
+finished_job = st.session_state.pop("finished_training_job", None)
+
 try:
     model_metrics = load_model_metrics()
-except (OSError, json.JSONDecodeError, requests.RequestException) as exc:
+except FileNotFoundError:
+    model_metrics = {}
+except (OSError, json.JSONDecodeError) as exc:
     st.warning(f"Could not load model metrics: {exc}")
     model_metrics = {}
 
+if finished_job is not None and finished_job["status"] == "succeeded":
+    st.success("Training finished; models and metrics saved.")
+    for m in finished_job["models"]:
+        st.write(f"Classification report for {m}")
+        classifcation_report = pd.DataFrame.from_dict(model_metrics.get(m, {}).get("classification_report", {}))
+        st.table(classifcation_report)
+elif finished_job is not None:
+    st.error(f"Training failed: {finished_job['error']}")
+
+try:
+    trained_models = [model["name"] for model in load_models() if model["trained"]]
+except requests.exceptions.RequestException as error:
+    st.error(f"Could not load models: {error_detail(error)}")
+    st.stop()
+
+if not trained_models:
+    st.info("No trained models yet. Train one above to see its metrics and feature importance.")
+    st.stop()
+
+st.subheader("Model Metrics")
 #Show metrics in a table format
-metrics_df = pd.DataFrame.from_dict(model_metrics, orient="index")
+metrics_df = pd.DataFrame.from_dict(
+    {name: metrics for name, metrics in model_metrics.items() if name in trained_models}, orient="index"
+)
 st.table(metrics_df.drop(columns=["classification_report"], errors="ignore"))
 
 ### -----------------
 
 st.subheader("View Feature Importance")
-selected_model_name = st.selectbox("Select Model", options=DEFAULT_COMPARISON_MODELS)
-X_train, y_train, X_test, y_test, feature_names = load_preprocessed_data()
+st.caption("SHAP values for the probability that red wins, on a sample of the test set.")
+selected_model_name = st.selectbox("Select Model", options=trained_models)
+_, _, _, _, feature_names = load_preprocessed_data()
 feature_names_simple = [name.split("__")[-1] for name in feature_names]
 if selected_model_name:
+    trained_at = model_metrics.get(selected_model_name, {}).get("trained_at")
+    shap_values, X_shap = load_shap_values(selected_model_name, trained_at)
 
-    model = load_model(selected_model_name)
-    
-
-    explainer = shap.Explainer(model, X_test)
-    shap_values = explainer(X_test)
-
-    #fig, ax = plt.subplots()
-    shap.summary_plot(shap_values, X_test, feature_names=feature_names_simple, show=False)
+    shap.summary_plot(shap_values, X_shap, feature_names=feature_names_simple, show=False)
     fig = plt.gcf()
     ax = plt.gca()
 
@@ -102,3 +168,4 @@ if selected_model_name:
                 axis.yaxis.label.set_color('white')
 
     st.pyplot(fig, transparent=True)
+    plt.close(fig)
