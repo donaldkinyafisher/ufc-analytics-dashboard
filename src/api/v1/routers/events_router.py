@@ -33,6 +33,7 @@ from src.api.v1.services.events_services import (
     get_event_with_fights,
     list_events,
     list_upcoming_events,
+    sync_upcoming_cards,
     sync_upcoming_events,
 )
 from src.scrapers.upcoming_events_scraper import scrape_upcoming_events
@@ -67,7 +68,8 @@ async def sync_events(db: Annotated[Session, Depends(get_db)]):
     """
     Runs the scraper to get update upcoming events. 
     Inserts new events into the events table, and updates already stored events to past,
-    if event_date < current_date.
+    if event_date < current_date. Then stores each upcoming event's fight card
+    (fighters, weight class, bout type).
     """
     async with _refresh_lock:
         try:
@@ -79,6 +81,7 @@ async def sync_events(db: Annotated[Session, Depends(get_db)]):
         today = utc_now.date()
         try:
             result = sync_upcoming_events(db, raw_events, today)
+            cards = await sync_upcoming_cards(db, list_upcoming_events(db, today))
             db.commit()
         except Exception:
             db.rollback()
@@ -87,7 +90,11 @@ async def sync_events(db: Annotated[Session, Depends(get_db)]):
         events = list_upcoming_events(db, today)
         synchronized_at = datetime.datetime.now(datetime.UTC)
         return EventSyncResponse(
-            **result.__dict__, synchronized_at=synchronized_at, events=events
+            **result.__dict__,
+            fights=cards.fights,
+            card_failures=cards.failed_events,
+            synchronized_at=synchronized_at,
+            events=events,
         )
 
 

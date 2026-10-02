@@ -28,5 +28,8 @@ class EventSyncResponse(BaseModel):
     updated: int
     completed: int
     malformed: int
+    # Fights stored across upcoming cards, and events whose page failed to load.
+    fights: int
+    card_failures: list[str]
     synchronized_at: datetime
     events: list[EventResponse]

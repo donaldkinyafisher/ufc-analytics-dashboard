@@ -172,9 +172,44 @@ def parse_completed_events(html: str) -> list[dict]:
     return events
 
 
-def parse_event_details(html: str, source_url: str | None = None) -> dict:
-    """Parse /event-details/<id> into event metadata and its fight links.
+def _event_row_fighters(row: Tag) -> list[dict]:
+    fighters = []
+    for corner, link in zip(("red", "blue"), row.select("a[href*='fighter-details']")):
+        profile_url = link.get("href")
+        fighters.append(
+            {
+                "corner": corner,
+                "name": _clean(link.get_text()),
+                "ufcstats_id": ufcstats_id(profile_url),
+                "profile_url": profile_url,
+            }
+        )
+    return fighters
 
+
+def _event_row_bout(cell: Tag | None) -> dict:
+    """Weight class and bout type from a card row's weight-class cell.
+
+    The event page has no bout-type text, so it is rebuilt in the format
+    fight pages use ('Lightweight Bout', 'UFC Lightweight Title Bout'); a
+    belt icon marks a title fight. Interim titles can't be told apart here.
+    """
+    text = _clean(cell.get_text()) if cell is not None else ""
+    weight_match = WEIGHT_CLASS_PATTERN.search(text)
+    weight_class = _clean(weight_match.group(0)) if weight_match else _or_none(text)
+    is_title = cell is not None and cell.select_one("img[src*='belt']") is not None
+    bout_type = None
+    if weight_class:
+        bout_type = f"UFC {weight_class} Title Bout" if is_title else f"{weight_class} Bout"
+    return {"weight_class": weight_class, "bout_type": bout_type, "is_title_bout": is_title}
+
+
+def parse_event_details(html: str, source_url: str | None = None) -> dict:
+    """Parse /event-details/<id> into event metadata and its card.
+
+    Each fight has its link, both fighters (first listed is "red"), weight
+    class and bout type. That is enough to store an upcoming card; completed
+    fights are re-read from their fight pages for results and stats.
     `bout_order` is 1 for the main event and increases down the card.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -184,18 +219,23 @@ def parse_event_details(html: str, source_url: str | None = None) -> dict:
         if label is not None:
             info[_clean(label.get_text()).rstrip(":").lower()] = _labelled_value(item)
 
+    headers = [_clean(th.get_text()).lower() for th in soup.select(f"{EVENT_DETAILS_SELECTOR} thead th")]
+    weight_col = headers.index("weight class") if "weight class" in headers else None
+
     fights = []
     for order, row in enumerate(soup.select(f"{EVENT_DETAILS_SELECTOR} tbody tr"), start=1):
         fight_url = row.get("data-link")
         if not fight_url:
             continue
-        fighters = [_clean(a.get_text()) for a in row.select("a[href*='fighter-details']")]
+        cells = row.select("td")
+        weight_cell = cells[weight_col] if weight_col is not None and weight_col < len(cells) else None
         fights.append(
             {
                 "ufcstats_id": ufcstats_id(fight_url),
                 "source_url": fight_url,
                 "bout_order": order,
-                "fighter_names": fighters,
+                "fighters": _event_row_fighters(row),
+                **_event_row_bout(weight_cell),
             }
         )
 

@@ -19,6 +19,14 @@ from playwright.async_api import Error as PlaywrightError
 
 logger = logging.getLogger(__name__)
 
+
+class BrowserClosedError(RuntimeError):
+    """The browser has died (e.g. the API is shutting down), so no page can load.
+
+    Raised instead of Playwright's error so a crawl stops rather than
+    recording every remaining page as a separate failure.
+    """
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -48,8 +56,17 @@ class UFCStatsBrowser:
         self._context = await self._browser.new_context(user_agent=USER_AGENT)
         return self
 
+    @property
+    def is_connected(self) -> bool:
+        return self._browser is not None and self._browser.is_connected()
+
+    def _raise_if_closed(self, exc: PlaywrightError) -> None:
+        if not self.is_connected:
+            raise BrowserClosedError(f"Browser closed: {exc}") from exc
+
     async def __aexit__(self, *exc_info) -> None:
-        if self._context is not None:
+        # A dead browser's context can't be closed; browser.close() is then a no-op.
+        if self._context is not None and self.is_connected:
             await self._context.close()
         if self._browser is not None:
             await self._browser.close()
@@ -60,18 +77,24 @@ class UFCStatsBrowser:
         """Return the page HTML once `wait_selector` has rendered.
 
         Retries with exponential backoff on timeouts and navigation errors.
+        Raises BrowserClosedError, without retrying, once the browser has died.
         """
         if self._context is None:
             raise RuntimeError("UFCStatsBrowser must be used as an async context manager")
 
         async with self._semaphore:
             for attempt in range(1, self.retries + 1):
-                page = await self._context.new_page()
+                try:
+                    page = await self._context.new_page()
+                except PlaywrightError as exc:
+                    self._raise_if_closed(exc)
+                    raise
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
                     await page.wait_for_selector(wait_selector, timeout=self.timeout_ms)
                     return await page.content()
                 except PlaywrightError as exc:
+                    self._raise_if_closed(exc)
                     if attempt == self.retries:
                         raise
                     delay = 2 ** attempt
@@ -79,6 +102,7 @@ class UFCStatsBrowser:
                                    attempt, self.retries, url, exc, delay)
                     await asyncio.sleep(delay)
                 finally:
-                    await page.close()
+                    if self.is_connected:
+                        await page.close()
 
         raise AssertionError("unreachable")

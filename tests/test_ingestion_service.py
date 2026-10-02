@@ -11,11 +11,13 @@ from sqlalchemy import func, select
 from src.api.v1.models import Event, Fight, Fighter, FightStatistic, ScrapeJob
 from src.api.v1.services import ingestion_services as svc
 from src.scrapers.historical_scraper import parse_fight_details, parse_fighter_details
+from src.scrapers.ufcstats_browser import BrowserClosedError
 from tests.helpers import (
     BASE,
     EVENT_URL,
     SMITH_URL,
     VAN_URL,
+    FakeBrowser,
     count,
     event_data,
     fixture,
@@ -119,14 +121,6 @@ def test_apply_sparse_profile_stores_missing_as_none(db):
 
 # --- job runner ------------------------------------------------------------
 
-class FakeBrowser:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc_info):
-        return None
-
-
 OTHER_EVENT_URL = f"{BASE}/event-details/1111111111111111"
 LISTED = [
     {"ufcstats_id": "1111111111111111", "name": "Newer Event", "event_date": date(2026, 9, 26),
@@ -138,14 +132,20 @@ LISTED = [
 
 @pytest.fixture
 def fake_crawl(monkeypatch):
-    """Patch the scraper so UFC 331 loads from fixtures and the newer event fails."""
-    state = {"fail": {OTHER_EVENT_URL}, "fetched_events": []}
+    """Patch the scraper so UFC 331 loads from fixtures and the newer event fails.
+
+    URLs in "closed", and every profile when "profiles_closed" is set, raise
+    BrowserClosedError as if the browser had died.
+    """
+    state = {"fail": {OTHER_EVENT_URL}, "closed": set(), "profiles_closed": False, "fetched_events": []}
 
     async def fetch_completed_events(browser, base_url, since=None, until=None):
         return [e for e in LISTED if (since is None or e["event_date"] >= since)]
 
     async def fetch_event_with_fights(browser, url):
         state["fetched_events"].append(url)
+        if url in state["closed"]:
+            raise BrowserClosedError("Browser closed: Target page, context or browser has been closed")
         if url in state["fail"]:
             raise TimeoutError("page did not render")
         if url == OTHER_EVENT_URL:
@@ -156,6 +156,8 @@ def fake_crawl(monkeypatch):
         return event_data()
 
     async def fetch_fighter(browser, url):
+        if state["profiles_closed"]:
+            raise BrowserClosedError("Browser closed: Target page, context or browser has been closed")
         return parse_fighter_details(fixture("fighter_complete.html"), url) | {
             "ufcstats_id": url.rsplit("/", 1)[-1], "name": None,
         }
@@ -195,6 +197,36 @@ def test_job_records_page_failure_and_still_succeeds(session_factory, fake_crawl
         assert db.scalar(select(Event).where(Event.ufcstats_id == "1111111111111111")) is None
         assert db.scalar(select(Event).where(Event.ufcstats_id == "8a0a35e7c74bebcc")).scraped_at is not None
         assert db.scalar(select(func.count()).select_from(Fighter).where(Fighter.last_synced_at.is_(None))) == 0
+
+
+def test_browser_closing_mid_crawl_fails_the_job(session_factory, fake_crawl):
+    # UFC 331 (older) is ingested first, then the browser dies on the newer event.
+    fake_crawl["fail"].clear()
+    fake_crawl["closed"].add(OTHER_EVENT_URL)
+    job = run_job(session_factory, mode="backfill")
+
+    assert job.status == "failed"
+    assert (job.events_total, job.events_done) == (2, 1)
+    assert job.fighters_upserted == 0  # profiles are not attempted
+    errors = json.loads(job.error_log)
+    assert len(errors) == 1
+    assert errors[0]["url"] is None and errors[0]["error"].startswith("BrowserClosedError")
+
+    with session_factory() as db:
+        # Events committed before the browser died are kept for the retry.
+        assert db.scalar(select(Event).where(Event.ufcstats_id == "8a0a35e7c74bebcc")).scraped_at is not None
+        assert db.scalar(select(Event).where(Event.ufcstats_id == "1111111111111111")) is None
+
+
+def test_browser_closing_during_profile_refresh_fails_the_job(session_factory, fake_crawl):
+    fake_crawl["fail"].clear()
+    fake_crawl["profiles_closed"] = True
+    job = run_job(session_factory, mode="backfill")
+
+    assert job.status == "failed"
+    assert (job.events_total, job.events_done) == (2, 2)
+    assert job.fighters_upserted == 0
+    assert [e["error"].split(":")[0] for e in json.loads(job.error_log)] == ["BrowserClosedError"]
 
 
 def test_incremental_job_only_fetches_missing_events(session_factory, fake_crawl):
@@ -248,6 +280,33 @@ def test_incremental_never_extends_backwards(session_factory, fake_crawl):
     assert job.status == "succeeded"
     assert job.events_total == 0  # UFC 331 (older) is left for a backfill
     assert fake_crawl["fetched_events"] == []
+
+
+def test_upcoming_sync_scraped_at_does_not_mark_event_ingested(session_factory, fake_crawl):
+    """An event seen by the upcoming sync still has its results ingested."""
+    with session_factory() as db:
+        db.add(Event(name="UFC 331: Van vs. Pantoja 2", ufcstats_id="8a0a35e7c74bebcc",
+                     source_url=EVENT_URL, event_date=date(2026, 9, 19), status="upcoming",
+                     scraped_at=svc.utc_now()))
+        db.commit()
+    fake_crawl["fail"].clear()
+
+    job = run_job(session_factory, mode="backfill", refresh_fighters=False)
+
+    assert job.events_total == 2
+    assert EVENT_URL in fake_crawl["fetched_events"]
+
+
+def test_incremental_ignores_events_only_seen_by_upcoming_sync(session_factory, fake_crawl):
+    with session_factory() as db:
+        db.add(Event(name="UFC 999", event_date=date(2030, 1, 1), status="upcoming",
+                     scraped_at=svc.utc_now()))
+        db.commit()
+
+    job = run_job(session_factory, mode="incremental")
+
+    assert job.status == "failed"
+    assert "run a backfill first" in job.error_log
 
 
 def test_incremental_on_empty_db_asks_for_backfill(session_factory, fake_crawl):

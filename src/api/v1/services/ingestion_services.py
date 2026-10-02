@@ -8,7 +8,8 @@ run_ingestion_job drives a whole ScrapeJob: it lists completed events,
 ingests each event in its own transaction (so an interrupted run resumes
 where it stopped), then refreshes the profiles of fighters it touched.
 A page failure rolls back only that event and is recorded on the job; the
-job is marked failed only when the crawl itself cannot run.
+job is marked failed only when the crawl itself cannot run, e.g. the event
+list fails to load or the browser dies (as on API shutdown).
 """
 
 import asyncio
@@ -34,7 +35,7 @@ from src.scrapers.historical_scraper import (
     fetch_event_with_fights,
     fetch_fighter,
 )
-from src.scrapers.ufcstats_browser import UFCStatsBrowser
+from src.scrapers.ufcstats_browser import BrowserClosedError, UFCStatsBrowser
 
 logger = logging.getLogger(__name__)
 
@@ -273,13 +274,21 @@ def fail_stale_jobs(db: Session) -> int:
     ).rowcount or 0
 
 
+def ingested_filter():
+    """Events whose results are stored.
+
+    The upcoming sync also sets scraped_at, so status must be checked too.
+    """
+    return (Event.status == "completed") & Event.scraped_at.is_not(None)
+
+
 def incremental_since(db: Session) -> date:
     """Lower date bound for an incremental job: the oldest ingested event.
 
     Incremental jobs pick up new events and fill gaps inside the range
     already stored, but never extend it backwards; that takes a backfill.
     """
-    oldest = db.scalar(select(func.min(Event.event_date)).where(Event.scraped_at.is_not(None)))
+    oldest = db.scalar(select(func.min(Event.event_date)).where(ingested_filter()))
     if oldest is None:
         raise ValueError("No events ingested yet; run a backfill first")
     return oldest
@@ -289,10 +298,10 @@ def select_events_to_ingest(db: Session, listed: list[dict], job: ScrapeJob) -> 
     """Events from the completed list this job should ingest, oldest first.
 
     listed is already limited to the job's date window (see
-    incremental_since for incremental jobs). Events with scraped_at set are
-    skipped unless a backfill asks to refresh them.
+    incremental_since for incremental jobs). Completed events with scraped_at
+    set are skipped unless a backfill asks to refresh them.
     """
-    scraped = set(db.scalars(select(Event.ufcstats_id).where(Event.scraped_at.is_not(None))))
+    scraped = set(db.scalars(select(Event.ufcstats_id).where(ingested_filter())))
     refresh = job.mode == "backfill" and job.refresh_existing
     pending = [event for event in listed if refresh or event["ufcstats_id"] not in scraped]
     return sorted(pending, key=lambda event: event["event_date"])
@@ -325,6 +334,8 @@ async def _refresh_fighters(
             *(fetch_fighter(browser, url) for _, url in batch), return_exceptions=True
         )
         for (_, url), result in zip(batch, results):
+            if isinstance(result, BrowserClosedError):
+                raise result  # every remaining profile would fail too
             try:
                 if isinstance(result, Exception):
                     raise result
@@ -380,6 +391,8 @@ async def run_ingestion_job(
                             for fight in data["fights"]
                             for fighter in fight["fighters"]
                         )
+                    except BrowserClosedError:
+                        raise  # every remaining event would fail too
                     except Exception as exc:
                         db.rollback()
                         _record_error(job, errors, url, exc)

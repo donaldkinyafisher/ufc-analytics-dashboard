@@ -91,7 +91,36 @@ def test_parse_event_details():
     main_event = event["fights"][0]
     assert main_event["bout_order"] == 1
     assert main_event["ufcstats_id"] == "568ec6af4008355a"
-    assert main_event["fighter_names"] == ["Joshua Van", "Alexandre Pantoja"]
+    assert [f["name"] for f in main_event["fighters"]] == ["Joshua Van", "Alexandre Pantoja"]
+    assert main_event["fighters"][0]["ufcstats_id"] == "17e97649403ba428"
+    assert main_event["weight_class"] == "Flyweight"
+    assert main_event["bout_type"] == "UFC Flyweight Title Bout"
+    assert main_event["is_title_bout"] is True
+
+
+def test_parse_upcoming_event_card():
+    url = "http://ufcstats.com/event-details/ad3fdba28a7540cf"
+    event = parse_event_details(fixture("event_upcoming.html"), url)
+
+    assert event["name"] == "UFC 332: Silva vs. Wang"
+    assert event["event_date"] == date(2026, 10, 3)
+    assert len(event["fights"]) == 14
+    main_event = event["fights"][0]
+    assert main_event["bout_order"] == 1
+    assert main_event["fighters"] == [
+        {"corner": "red", "name": "Natalia Silva", "ufcstats_id": "262d32ebda89efc4",
+         "profile_url": "http://ufcstats.com/fighter-details/262d32ebda89efc4"},
+        {"corner": "blue", "name": "Wang Cong", "ufcstats_id": "2997e7fe3c9d3d4a",
+         "profile_url": "http://ufcstats.com/fighter-details/2997e7fe3c9d3d4a"},
+    ]
+    assert main_event["weight_class"] == "Women's Flyweight"
+    assert main_event["bout_type"] == "UFC Women's Flyweight Title Bout"
+    assert main_event["is_title_bout"] is True
+    co_main = event["fights"][1]
+    assert (co_main["weight_class"], co_main["bout_type"], co_main["is_title_bout"]) == (
+        "Bantamweight", "Bantamweight Bout", False,
+    )
+    assert all(len(fight["fighters"]) == 2 for fight in event["fights"])
 
 
 # --- fight details ---------------------------------------------------------

@@ -1,15 +1,22 @@
 """Event lifecycle and synchronization operations."""
 
+import asyncio
+import logging
 import re
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 #from src.api.v1.schemas.events import EventResponse
-from src.api.v1.models import Event, Fight
+from src.api.v1.models import Event, Fight, utc_now
+from src.api.v1.services.ingestion_services import upsert_fighter_stub
+from src.scrapers.historical_scraper import fetch_event, ufcstats_id
+from src.scrapers.ufcstats_browser import UFCStatsBrowser
 from src.scrapers.upcoming_events_scraper import parse_event_date
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,18 +62,23 @@ def _text(value: object) -> str:
 
 
 def sync_upcoming_events(
-    db: Session, scraped_events: list[dict], as_of: date
+    db: Session, scraped_events: list[dict], as_of: date, synced_at: datetime | None = None
 ) -> EventSyncResult:
     """Expire past events and upsert valid scraped events atomically.
+
+    Every upserted event gets scraped_at = synced_at, which records when the
+    upcoming sync last saw it. Expired events have scraped_at cleared so
+    historical ingestion picks them up for their results.
 
     Scraped events with an unparseable date are ignored. The caller should
     perform scraping before entering this operation so scraper failures leave
     the database untouched.
     """
+    synced_at = synced_at or utc_now()
     completed = db.execute(
         update(Event)
         .where(Event.status == "upcoming", Event.event_date <= as_of)
-        .values(status="completed")
+        .values(status="completed", scraped_at=None)
     ).rowcount or 0
 
     inserted = 0
@@ -92,7 +104,7 @@ def sync_upcoming_events(
             db, name, parsed_date.date(), values["location"], source_url
         )
         if event is None:
-            db.add(Event(**values, source_url=source_url))
+            db.add(Event(**values, source_url=source_url, scraped_at=synced_at))
             inserted += 1
             continue
 
@@ -104,6 +116,7 @@ def sync_upcoming_events(
             for key, value in values.items():
                 setattr(event, key, value)
             updated += 1
+        event.scraped_at = synced_at
 
     db.flush()
     return EventSyncResult(
@@ -113,6 +126,91 @@ def sync_upcoming_events(
         completed=completed,
         malformed=malformed,
     )
+
+
+@dataclass
+class CardSyncResult:
+    fights: int = 0
+    failed_events: list[str] = field(default_factory=list)
+
+
+def _is_complete_bout(bout: dict) -> bool:
+    fighters = bout.get("fighters") or []
+    return bool(bout.get("ufcstats_id")) and len(fighters) == 2 and all(
+        fighter.get("ufcstats_id") and fighter.get("name") for fighter in fighters
+    )
+
+
+def store_upcoming_card(db: Session, event: Event, card: list[dict]) -> list[Fight]:
+    """Store an upcoming event's card: fighters, weight class and bout type.
+
+    Fighters are matched by ufcstats id; unknown fighters become stubs whose
+    profiles are filled by the next ingestion run. No statistics are stored.
+    Bouts that have left the card are deleted, unless the card came back
+    empty, which is more likely a page problem than every bout being cancelled.
+    """
+    if event.status != "upcoming":
+        raise ValueError(f"Event {event.id} is {event.status}, not upcoming")
+    if event.ufcstats_id is None:
+        event.ufcstats_id = ufcstats_id(event.source_url)
+
+    bouts = [bout for bout in card if _is_complete_bout(bout)]
+    if len(bouts) < len(card):
+        logger.warning("Skipped %d malformed bouts on %s", len(card) - len(bouts), event.name)
+
+    # Delete first, so a bout re-listed under a new id doesn't clash with
+    # its old row on (event, red, blue).
+    if bouts:
+        on_card = {bout["ufcstats_id"] for bout in bouts}
+        for fight in db.scalars(select(Fight).where(Fight.event_id == event.id)).all():
+            if fight.ufcstats_id not in on_card:
+                db.delete(fight)
+        db.flush()
+
+    fights = []
+    for bout in bouts:
+        red, blue = (upsert_fighter_stub(db, fighter) for fighter in bout["fighters"])
+        values = {
+            "event_id": event.id,
+            "red_fighter_id": red.id,
+            "blue_fighter_id": blue.id,
+            "bout_order": bout.get("bout_order"),
+            "weight_class": bout.get("weight_class"),
+            "bout_type": bout.get("bout_type"),
+            "is_title_bout": bool(bout.get("is_title_bout")),
+            "source_url": bout.get("source_url"),
+        }
+        fight = db.scalar(select(Fight).where(Fight.ufcstats_id == bout["ufcstats_id"]))
+        if fight is None:
+            fight = Fight(ufcstats_id=bout["ufcstats_id"], **values)
+            db.add(fight)
+        else:
+            for key, value in values.items():
+                setattr(fight, key, value)
+        fights.append(fight)
+    db.flush()
+    return fights
+
+
+async def sync_upcoming_cards(db: Session, events: list[Event]) -> CardSyncResult:
+    """Fetch each event's page and store its card.
+
+    A page that fails to load leaves that event's stored card as it was.
+    """
+    result = CardSyncResult()
+    targets = [event for event in events if event.source_url]
+    async with UFCStatsBrowser() as browser:
+        pages = await asyncio.gather(
+            *(fetch_event(browser, event.source_url) for event in targets),
+            return_exceptions=True,
+        )
+    for event, page in zip(targets, pages):
+        if isinstance(page, Exception):
+            logger.warning("Could not fetch card for %s: %s", event.name, page)
+            result.failed_events.append(event.name)
+            continue
+        result.fights += len(store_upcoming_card(db, event, page["fights"]))
+    return result
 
 
 def list_upcoming_events(db: Session, as_of: date) -> list:

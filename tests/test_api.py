@@ -6,10 +6,11 @@ from fastapi.testclient import TestClient
 from src.api.v1.database import get_db
 from src.api.v1.main import app
 from src.api.v1.models import Event
-from src.api.v1.routers import ingestionRouter
-from src.api.v1.services import ingestionServices as svc
-from src.scrapers.historical_scraper import parse_fighter_details
-from tests.helpers import VAN_URL, event_data, fixture
+from src.api.v1.routers import events_router, ingestion_router
+from src.api.v1.services import events_services
+from src.api.v1.services import ingestion_services as svc
+from src.scrapers.historical_scraper import parse_event_details, parse_fighter_details
+from tests.helpers import VAN_URL, FakeBrowser, event_data, fixture
 
 
 @pytest.fixture
@@ -24,7 +25,7 @@ def client(session_factory, monkeypatch):
         with session_factory() as db:
             yield db
 
-    monkeypatch.setattr(ingestionRouter, "run_ingestion_job", fake_run)
+    monkeypatch.setattr(ingestion_router, "run_ingestion_job", fake_run)
     app.dependency_overrides[get_db] = override_get_db
     # Not used as a context manager, so the lifespan (which touches the real DB) doesn't run.
     test_client = TestClient(app)
@@ -132,6 +133,30 @@ def test_upcoming_route_still_resolves(client, seeded):
 
 
 # --- fights ----------------------------------------------------------------
+
+def test_sync_stamps_scraped_at_on_upcoming_events(client, monkeypatch):
+    async def fake_scrape(headless=True):
+        return [{"event_name": "UFC 999: Future", "date": "January 01, 2099",
+                 "location": "Las Vegas, Nevada, USA",
+                 "source_url": "http://ufcstats.com/event-details/f"}]
+
+    async def fake_fetch_event(browser, url):
+        return parse_event_details(fixture("event_upcoming.html"), url)
+
+    monkeypatch.setattr(events_router, "scrape_upcoming_events", fake_scrape)
+    monkeypatch.setattr(events_services, "UFCStatsBrowser", FakeBrowser)
+    monkeypatch.setattr(events_services, "fetch_event", fake_fetch_event)
+    synced = client.post("/api/v1/events/upcoming/sync")
+
+    assert synced.status_code == 200
+    assert (synced.json()["fights"], synced.json()["card_failures"]) == (14, [])
+    upcoming = client.get("/api/v1/events/upcoming").json()
+    assert [e["name"] for e in upcoming] == ["UFC 999: Future"]
+    assert upcoming[0]["scraped_at"] is not None
+    card = client.get(f"/api/v1/events/{upcoming[0]['id']}").json()["fights"]
+    assert len(card) == 14
+    assert card[0]["bout_type"] == "UFC Women's Flyweight Title Bout"
+
 
 def test_get_fight_includes_statistics(client, seeded):
     response = client.get(f"/api/v1/fights/{seeded['title_fight_id']}")

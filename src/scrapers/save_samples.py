@@ -5,6 +5,7 @@ print what the parser extracts from it.
 Run:
     uv run python -m src.scrapers.save_samples            # save + print
     uv run python -m src.scrapers.save_samples --no-save  # print only
+    uv run python -m src.scrapers.save_samples --only event_upcoming.html
 """
 
 import argparse
@@ -39,6 +40,12 @@ SAMPLES = {
     # UFC 331: Van vs. Pantoja 2
     "event_ufc331.html": (
         f"{BASE}/event-details/8a0a35e7c74bebcc",
+        EVENT_DETAILS_SELECTOR,
+        parse_event_details,
+    ),
+    # UFC 332: Silva vs. Wang, an upcoming card (fighters and weight classes, no results).
+    "event_upcoming.html": (
+        f"{BASE}/event-details/ad3fdba28a7540cf",
         EVENT_DETAILS_SELECTOR,
         parse_event_details,
     ),
@@ -81,16 +88,17 @@ SAMPLES = {
 }
 
 
-async def main(save: bool) -> None:
+async def main(save: bool, only: list[str] | None = None) -> None:
     if save:
         FIXTURES_DIR.mkdir(parents=True, exist_ok=True)
 
+    samples = {name: sample for name, sample in SAMPLES.items() if not only or name in only}
     async with UFCStatsBrowser() as browser:
         pages = await asyncio.gather(
-            *(browser.fetch_rendered(url, selector) for url, selector, _ in SAMPLES.values())
+            *(browser.fetch_rendered(url, selector) for url, selector, _ in samples.values())
         )
 
-    for (name, (url, _, parser)), html in zip(SAMPLES.items(), pages):
+    for (name, (url, _, parser)), html in zip(samples.items(), pages):
         if save:
             (FIXTURES_DIR / name).write_text(html, encoding="utf-8")
         print(f"\n===== {name}  ({url})")
@@ -101,5 +109,6 @@ async def main(save: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-save", action="store_true", help="print parsed output only")
+    parser.add_argument("--only", nargs="+", choices=SAMPLES, help="fixture names to fetch")
     args = parser.parse_args()
-    asyncio.run(main(save=not args.no_save))
+    asyncio.run(main(save=not args.no_save, only=args.only))

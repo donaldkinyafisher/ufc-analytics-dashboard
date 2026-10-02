@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -36,3 +38,31 @@ def event_data() -> dict:
 
 def count(db: Session, model) -> int:
     return db.scalar(select(func.count()).select_from(model))
+
+
+class FakeBrowser:
+    """Stands in for UFCStatsBrowser when fetch functions are patched."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
+
+
+def synthetic_features(n: int = 100) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    frame = pd.DataFrame({
+        "fight_id": range(n),
+        "event_date": pd.date_range("2020-01-01", periods=n, freq="7D"),
+        "winner_side": "red",  # ufcstats lists the winner first
+        "red_name": [f"R{i}" for i in range(n)],
+        "blue_name": [f"B{i}" for i in range(n)],
+        "red_height_in": rng.normal(72, 3, n),
+        "blue_height_in": rng.normal(70, 3, n),
+        "red_stance": "Orthodox",
+        "blue_stance": "Southpaw",
+        "sex": "Men",
+    })
+    frame["height_in_diff"] = frame["red_height_in"] - frame["blue_height_in"]
+    return frame
