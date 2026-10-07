@@ -1,0 +1,14 @@
+.venv
+.env
+.git
+.github
+.claude
+.agents
+.devcontainer
+.pytest_cache
+.ruff_cache
+**/__pycache__
+tests
+*.db.bak*
+plan.md
+todo.md
