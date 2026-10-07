@@ -10,7 +10,7 @@ project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
 	sys.path.insert(0, str(project_root))
 
-from src.utils import API_BASE_URL, load_status  # noqa: E402  (needs the path above)
+from src.utils import API_BASE_URL, READ_ONLY, load_status  # noqa: E402  (needs the path above)
 
 # 1. Ask the API what is stored; every page depends on it.
 try:
@@ -29,6 +29,10 @@ ml_page = st.Page("app_pages/train.py", title="ML Model Training", icon="🤖")
 setup_page = st.Page("app_pages/setup.py", title="Setup", icon="🛠️", default=True)
 
 # 3. Until the first ingestion finishes the database is empty, so only Setup is shown.
+#    The read-only copy can't scrape, so an empty snapshot is an error instead.
+if status["needs_setup"] and READ_ONLY:
+	st.error("This read-only copy has no fight data. Rebuild it from a populated database.")
+	st.stop()
 pg = st.navigation([setup_page] if status["needs_setup"] else [home_page, data_page, ml_page])
 
 # 4. Run the selected page

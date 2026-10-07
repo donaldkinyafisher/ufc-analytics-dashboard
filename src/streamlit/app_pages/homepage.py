@@ -6,6 +6,7 @@ import requests
 
 import streamlit as st
 from src.utils import (
+    READ_ONLY,
     api_get,
     api_post,
     ingestion_progress,
@@ -25,29 +26,42 @@ with logo_column:
     st.image(str(LOGO_PATH), use_container_width=True, output_format="PNG")
 st.title("UFC Data Analytics")
 
-st.markdown(
-    """
-    Welcome to the UFC Data Analytics app!
-    This app provides data analytics and machine learning predictions for UFC fights.
-    Use the navigation menu on the left to explore different pages. If this is your first time opening the webpage, start by fetching the latest upcoming events using the :red[**Sync upcoming events**] button below. You can then view the upcoming events and their fight predictions using the trained machine learning models. If you haven't trained any models yet, head over to the :red[**ML Model Training**] page to train one. Enjoy exploring the data and predictions! :sunglasses:
-    """
-)
+if READ_ONLY:
+    st.markdown(
+        """
+        Welcome to the UFC Data Analytics app!
+        This app provides data analytics and machine learning predictions for UFC fights.
+        Use the navigation menu on the left to explore different pages. Below are the upcoming events and their fight predictions from the trained machine learning models. The data is a snapshot that is refreshed regularly. Enjoy exploring the data and predictions! :sunglasses:
+        """
+    )
+else:
+    st.markdown(
+        """
+        Welcome to the UFC Data Analytics app!
+        This app provides data analytics and machine learning predictions for UFC fights.
+        Use the navigation menu on the left to explore different pages. If this is your first time opening the webpage, start by fetching the latest upcoming events using the :red[**Sync upcoming events**] button below. You can then view the upcoming events and their fight predictions using the trained machine learning models. If you haven't trained any models yet, head over to the :red[**ML Model Training**] page to train one. Enjoy exploring the data and predictions! :sunglasses:
+        """
+    )
 st.subheader("Upcoming Events")
 # Filled once the events are fetched, so a sync below shows its own time.
 last_synced_slot = st.empty()
 
 status = load_status()
 active_ingestion = status["active_ingestion_job"]
-sync_col, history_col, _ = st.columns(3)
-sync_clicked = sync_col.button("Sync upcoming events", use_container_width=True)
-update_clicked = history_col.button(
-    "Update fight history",
-    use_container_width=True,
-    disabled=active_ingestion is not None,
-    help="Scrape completed events newer than the stored history, for analytics and training.",
-)
+if READ_ONLY:
+    sync_clicked = update_clicked = False
+else:
+    sync_col, history_col, _ = st.columns(3)
+    sync_clicked = sync_col.button("Sync upcoming events", use_container_width=True)
+    update_clicked = history_col.button(
+        "Update fight history",
+        use_container_width=True,
+        disabled=active_ingestion is not None,
+        help="Scrape completed events newer than the stored history, for analytics and training.",
+    )
 if status["newest_event_date"]:
     st.caption(
+        f"{'Read-only snapshot. ' if READ_ONLY else ''}"
         f"Fight history: {status['events_ingested']:,} events, "
         f"{pd.Timestamp(status['oldest_event_date']):%d %b %Y} to {pd.Timestamp(status['newest_event_date']):%d %b %Y}."
     )
@@ -124,7 +138,9 @@ except requests.exceptions.RequestException as error:
     st.error(f"Could not load models: {error}")
 
 if events_df.empty:
-    st.info("No upcoming events stored. Run Sync upcoming events.")
+    st.info("No upcoming events in this snapshot." if READ_ONLY else "No upcoming events stored. Run Sync upcoming events.")
+elif not trained_models and READ_ONLY:
+    st.info("No trained models in this snapshot.")
 elif not trained_models:
     st.info("No trained models yet. Train one to get fight predictions.")
     st.page_link("app_pages/train.py", label="Go to ML Model Training", icon="🤖")
@@ -150,7 +166,7 @@ else:
         st.error(f"Prediction failed: {error}")
 
     if fights == []:
-        st.info("No fights stored for this card yet. Run Sync upcoming events.")
+        st.info("No fights stored for this card yet." + ("" if READ_ONLY else " Run Sync upcoming events."))
     elif fights:
         percent = st.column_config.ProgressColumn(format="%.0f%%", min_value=0, max_value=100)
         st.dataframe(

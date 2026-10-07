@@ -8,6 +8,8 @@ from src.ml import utils as ml_utils
 from src.ml.predictor import load_trained_model
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+# Set in the hosted snapshot: scraping, syncing and training stay local, so their controls are hidden.
+READ_ONLY = os.getenv("READ_ONLY", "").lower() in ("1", "true")
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading fight data...")

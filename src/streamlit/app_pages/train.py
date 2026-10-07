@@ -10,6 +10,7 @@ import streamlit as st
 from src.ml.features import FEATURE_COLUMNS
 from src.ml.utils import MODEL_NAMES
 from src.utils import (
+    READ_ONLY,
     api_get,
     error_detail,
     load_event_predictions,
@@ -72,7 +73,10 @@ st.subheader("Train Model")
 
 # Training runs as an API job; the page polls it while it runs.
 active_job = load_status()["active_training_job"]
-if active_job is not None:
+if READ_ONLY:
+    st.info("Training runs on the local copy of this app. The metrics and feature importance below "
+            "are from the models in this snapshot.")
+elif active_job is not None:
     training_progress(active_job["id"])
 else:
     selected_model_to_train = st.multiselect("Select model to train", options=['All'] + MODEL_NAMES)
@@ -115,7 +119,8 @@ except requests.exceptions.RequestException as error:
     st.stop()
 
 if not trained_models:
-    st.info("No trained models yet. Train one above to see its metrics and feature importance.")
+    st.info("No trained models in this snapshot." if READ_ONLY
+            else "No trained models yet. Train one above to see its metrics and feature importance.")
     st.stop()
 
 st.subheader("Model Metrics")
