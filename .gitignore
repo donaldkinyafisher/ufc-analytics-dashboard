@@ -4,6 +4,8 @@
 __pycache__/
 *.py[cod]
 *.db
+# The hosted read-only copy is built from the committed database
+!ufc_analytics.db
 .streamlit/secrets.toml
 *.pytest_cache/
 *.ruff_cache/
@@ -14,8 +16,6 @@ __pycache__/
 .claude/
 
 
-# Built locally on each machine (trained models, saved split, metrics)
-src/ml/artifacts/
 *.db.bak*
 plan.md
 todo.md

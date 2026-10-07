@@ -1,0 +1,224 @@
+{
+  "pytorch_mlp": {
+    "accuracy": 0.6308571428571429,
+    "precision": 0.6223862238622386,
+    "recall": 0.5988165680473373,
+    "f1_score": 0.6103739445114595,
+    "classification_report": {
+      "blue": {
+        "precision": 0.6382070437566703,
+        "recall": 0.6607734806629835,
+        "f1-score": 0.6492942453854506,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.6223862238622386,
+        "recall": 0.5988165680473373,
+        "f1-score": 0.6103739445114595,
+        "support": 845.0
+      },
+      "accuracy": 0.6308571428571429,
+      "macro avg": {
+        "precision": 0.6302966338094544,
+        "recall": 0.6297950243551604,
+        "f1-score": 0.6298340949484551,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.6305678478647876,
+        "recall": 0.6308571428571429,
+        "f1-score": 0.6305013001062949,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T19:10:47+00:00"
+  },
+  "logistic_regression": {
+    "accuracy": 0.6051428571428571,
+    "precision": 0.5829741379310345,
+    "recall": 0.6402366863905326,
+    "f1_score": 0.6102650874224478,
+    "classification_report": {
+      "blue": {
+        "precision": 0.6301703163017032,
+        "recall": 0.5723756906077349,
+        "f1-score": 0.5998841922408802,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.5829741379310345,
+        "recall": 0.6402366863905326,
+        "f1-score": 0.6102650874224478,
+        "support": 845.0
+      },
+      "accuracy": 0.6051428571428571,
+      "macro avg": {
+        "precision": 0.6065722271163688,
+        "recall": 0.6063061884991336,
+        "f1-score": 0.605074639831664,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.607381304459866,
+        "recall": 0.6051428571428571,
+        "f1-score": 0.6048966816285515,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T19:10:47+00:00"
+  },
+  "svm": {
+    "accuracy": 0.608,
+    "precision": 0.5839493136219641,
+    "recall": 0.6544378698224852,
+    "f1_score": 0.6171875,
+    "classification_report": {
+      "blue": {
+        "precision": 0.6363636363636364,
+        "recall": 0.5646408839779006,
+        "f1-score": 0.5983606557377049,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.5839493136219641,
+        "recall": 0.6544378698224852,
+        "f1-score": 0.6171875,
+        "support": 845.0
+      },
+      "accuracy": 0.608,
+      "macro avg": {
+        "precision": 0.6101564749928002,
+        "recall": 0.6095393769001929,
+        "f1-score": 0.6077740778688525,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.6110550062398004,
+        "recall": 0.608,
+        "f1-score": 0.6074513319672131,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T19:10:49+00:00"
+  },
+  "knn": {
+    "accuracy": 0.5725714285714286,
+    "precision": 0.5553021664766249,
+    "recall": 0.5763313609467455,
+    "f1_score": 0.5656213704994193,
+    "classification_report": {
+      "blue": {
+        "precision": 0.5899198167239404,
+        "recall": 0.569060773480663,
+        "f1-score": 0.5793025871766029,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.5553021664766249,
+        "recall": 0.5763313609467455,
+        "f1-score": 0.5656213704994193,
+        "support": 845.0
+      },
+      "accuracy": 0.5725714285714286,
+      "macro avg": {
+        "precision": 0.5726109916002826,
+        "recall": 0.5726960672137043,
+        "f1-score": 0.5724619788380111,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.5732044370330939,
+        "recall": 0.5725714285714286,
+        "f1-score": 0.5726965139810486,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T19:10:50+00:00"
+  },
+  "random_forest": {
+    "accuracy": 0.6234285714285714,
+    "precision": 0.6037946428571429,
+    "recall": 0.6402366863905326,
+    "f1_score": 0.6214819069500287,
+    "classification_report": {
+      "blue": {
+        "precision": 0.6440281030444965,
+        "recall": 0.6077348066298343,
+        "f1-score": 0.625355315520182,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.6037946428571429,
+        "recall": 0.6402366863905326,
+        "f1-score": 0.6214819069500287,
+        "support": 845.0
+      },
+      "accuracy": 0.6234285714285714,
+      "macro avg": {
+        "precision": 0.6239113729508197,
+        "recall": 0.6239857465101835,
+        "f1-score": 0.6234186112351053,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.6246010894111743,
+        "recall": 0.6234285714285714,
+        "f1-score": 0.6234850125248793,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T20:04:01+00:00"
+  },
+  "xgboost": {
+    "accuracy": 0.6005714285714285,
+    "precision": 0.5786637931034483,
+    "recall": 0.6355029585798817,
+    "f1_score": 0.6057529610829103,
+    "classification_report": {
+      "blue": {
+        "precision": 0.6253041362530414,
+        "recall": 0.5679558011049723,
+        "f1-score": 0.5952518818760857,
+        "support": 905.0
+      },
+      "red": {
+        "precision": 0.5786637931034483,
+        "recall": 0.6355029585798817,
+        "f1-score": 0.6057529610829103,
+        "support": 845.0
+      },
+      "accuracy": 0.6005714285714285,
+      "macro avg": {
+        "precision": 0.6019839646782448,
+        "recall": 0.601729379842427,
+        "f1-score": 0.6005024214794981,
+        "support": 1750.0
+      },
+      "weighted avg": {
+        "precision": 0.6027835134179521,
+        "recall": 0.6005714285714285,
+        "f1-score": 0.6003224029788096,
+        "support": 1750.0
+      }
+    },
+    "train_size": 6997,
+    "test_size": 1750,
+    "test_from": "2023-05-20",
+    "trained_at": "2026-10-02T19:10:52+00:00"
+  }
+}
