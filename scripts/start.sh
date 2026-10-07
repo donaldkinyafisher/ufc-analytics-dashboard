@@ -20,6 +20,6 @@ EOF
 
 exec streamlit run src/streamlit/main.py \
     --server.port "${PORT:-8501}" \
-    --server.address 127.0.0.1 \
+    --server.address 0.0.0.0 \
     --server.headless true \
     --browser.gatherUsageStats false

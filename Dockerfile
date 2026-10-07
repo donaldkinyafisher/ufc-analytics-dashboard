@@ -18,4 +18,10 @@ COPY scripts/start.sh ./scripts/start.sh
 # No Chromium: scraping, syncing and training stay on the local copy.
 ENV READ_ONLY=true PATH=/app/.venv/bin:$PATH
 
+# Public Streamlit endpoint; publish with `-p 8501:8501`.
+EXPOSE 8501
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)" || exit 1
+
 CMD ["sh", "scripts/start.sh"]
